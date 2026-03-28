@@ -12,6 +12,8 @@
   },
   "dependencies": {
     "@google/genai": "^1.29.0",
+    "@remotion/player": "^4.0.240",
+    "@remotion/webcodecs": "^4.0.240",
     "@supabase/supabase-js": "^2.100.1",
     "@tailwindcss/vite": "^4.1.14",
     "@vitejs/plugin-react": "^5.0.4",
@@ -19,11 +21,10 @@
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "mp4-muxer": "^5.2.2",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "remotion": "^4.0.240",
-    "@remotion/player": "^4.0.240",
-    "@remotion/webcodecs": "^4.0.240",
     "vite": "^6.2.0"
   },
   "devDependencies": {

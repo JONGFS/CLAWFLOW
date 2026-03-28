@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Upload, Check, Loader2, ChevronRight, Plus, X, Download, RefreshCw,
-  LayoutGrid, MapPin, DollarSign, Maximize, Sparkles, LogOut, Bed, Bath,
+  LayoutGrid, MapPin, DollarSign, Maximize, Sparkles, LogOut, Bed, Bath, Bookmark,
 } from 'lucide-react';
 import { Player } from '@remotion/player';
 import { VideoComposition, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS } from './VideoComposition';
@@ -15,12 +15,16 @@ import type { VideoCompositionProps } from './VideoComposition';
 import { useAuth } from './AuthContext';
 import AuthPage from './AuthPage';
 import LandingPage from './LandingPage';
+import SavedVideosPage from './SavedVideosPage';
+import { buildMp4Filename, downloadBlob } from './downloads';
+import { renderVideoToMp4, canExportMp4 } from './renderVideo';
+import { supabase } from './supabase';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type Screen = 'input' | 'loading' | 'results';
+type Screen = 'input' | 'loading' | 'results' | 'saved';
 type Page = 'landing' | 'login' | 'signup';
 
 interface Photo {
@@ -46,16 +50,37 @@ interface GenerationResult {
   improvement_notes: string[];
 }
 
+function formatSaveError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const lower = message.toLowerCase();
+
+  if (lower.includes('saved-video-photos') || lower.includes('saved-video-mp4s') || lower.includes('bucket')) {
+    return 'Supabase storage is not ready. Create the `saved-video-photos` and `saved-video-mp4s` buckets and allow this user to upload files.';
+  }
+
+  if (lower.includes('saved_videos') || lower.includes('relation') || lower.includes('does not exist')) {
+    return 'Supabase database setup is incomplete. Create the `saved_videos` table and add insert/select policies for authenticated users.';
+  }
+
+  if (lower.includes('row-level security') || lower.includes('permission') || lower.includes('not allowed') || lower.includes('unauthorized')) {
+    return 'Supabase permissions blocked the save request. Check your row-level security policies and storage bucket permissions.';
+  }
+
+  return message;
+}
+
 // ── Navbar ─────────────────────────────────────────────────────────────────────
 
-const Navbar = ({ onReset, onSignOut }: { onReset: () => void; onSignOut: () => void }) => (
+const Navbar = ({ onReset, onShowSaved, onSignOut }: { onReset: () => void; onShowSaved: () => void; onSignOut: () => void }) => (
   <nav className="flex items-center justify-between py-6 px-8 max-w-7xl mx-auto w-full">
     <div className="flex items-center gap-2 cursor-pointer" onClick={onReset}>
       <span className="logo text-2xl font-bold tracking-tight">LandlordFlip<span className="text-coral">.</span></span>
     </div>
     <div className="hidden md:flex items-center gap-8 text-sm font-medium text-white/60">
+      <button onClick={onShowSaved} className="hover:text-white transition-colors flex items-center gap-1.5">
+        <Bookmark className="w-4 h-4" /> Saved Videos
+      </button>
       <a href="#" className="hover:text-white transition-colors">How it works</a>
-      <a href="#" className="hover:text-white transition-colors">Pricing</a>
     </div>
     <button onClick={onSignOut} className="btn-ghost text-sm flex items-center gap-2">
       <LogOut className="w-4 h-4" /> Sign Out
@@ -65,7 +90,9 @@ const Navbar = ({ onReset, onSignOut }: { onReset: () => void; onSignOut: () => 
 
 // ── InputForm ──────────────────────────────────────────────────────────────────
 
-const InputForm = ({ onGenerate }: { onGenerate: (jobId: string, photos: Photo[]) => void }) => {
+interface ListingMeta { title: string; price: string; neighborhood: string }
+
+const InputForm = ({ onGenerate }: { onGenerate: (jobId: string, photos: Photo[], meta: ListingMeta) => void }) => {
   const [title, setTitle] = useState('');
   const [price, setPrice] = useState('');
   const [beds, setBeds] = useState('');
@@ -132,7 +159,7 @@ const InputForm = ({ onGenerate }: { onGenerate: (jobId: string, photos: Photo[]
       const res = await fetch(`${API_BASE}/api/generate`, { method: 'POST', body: form });
       const json = await res.json();
       if (!res.ok) throw new Error(json.detail || 'Generation failed');
-      onGenerate(json.job_id, photos);
+      onGenerate(json.job_id, photos, { title: title.trim(), price, neighborhood: neighborhood.trim() });
     } catch (err: any) {
       setSubmitError(err.message || 'Something went wrong');
     } finally {
@@ -354,10 +381,13 @@ const LoadingState = ({ jobId, onComplete, onError }: { jobId: string; onComplet
 
 // ── ResultsView ────────────────────────────────────────────────────────────────
 
-const ResultsView = ({ result, photos, audioUrl, onReset }: { result: GenerationResult; photos: Photo[]; audioUrl: string | null; onReset: () => void }) => {
+const ResultsView = ({ result, photos, audioUrl, listingMeta, onReset }: { result: GenerationResult; photos: Photo[]; audioUrl: string | null; listingMeta: ListingMeta | null; onReset: () => void }) => {
+  const { user } = useAuth();
   const [exporting, setExporting] = useState(false);
   const [exportProgress, setExportProgress] = useState(0);
-  const canExport = typeof window.VideoEncoder !== 'undefined';
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [mp4Blob, setMp4Blob] = useState<Blob | null>(null);
 
   const photoUrls = photos.map(p => p.url);
   const getPhotoSrc = (index: number) => photos[index]?.url ?? `https://picsum.photos/seed/promo${index}/1080/1920`;
@@ -367,23 +397,96 @@ const ResultsView = ({ result, photos, audioUrl, onReset }: { result: Generation
   );
 
   const handleExport = async () => {
-    if (!canExport) {
-      alert('Export requires Chrome 94+ or Edge 94+');
+    if (!canExportMp4()) {
+      alert('Export requires a Chromium browser with WebCodecs support, such as current Chrome or Edge.');
       return;
     }
     setExporting(true);
     setExportProgress(0);
     try {
-      const { convertMedia } = await import('@remotion/webcodecs');
-      // WebCodecs-based export — uses convertMedia for browser rendering
-      // Note: full browser-side rendering with Remotion requires Remotion Studio or Lambda;
-      // convertMedia handles media conversion. For now, we provide the Player preview.
-      alert('Full MP4 export coming soon. Use the Player preview to review your video.');
-    } catch (err) {
+      const blob = await renderVideoToMp4(result.scene_sequence, photos.map(p => p.file), setExportProgress);
+      setMp4Blob(blob);
+      downloadBlob(blob, buildMp4Filename(listingMeta?.title));
+    } catch (err: any) {
       console.error('Export failed:', err);
-      alert('Export failed. Please try again.');
+      alert(`Export failed: ${err?.message || err}`);
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!user) {
+      alert('Sign in before saving videos.');
+      return;
+    }
+    if (saved) return;
+    setSaving(true);
+    try {
+      // 1. Upload photos to persistent storage
+      const persistentPhotoUrls: string[] = [];
+      for (const photo of photos) {
+        const ext = photo.file.name.match(/\.[^.]+$/)?.[0] || '.jpg';
+        const path = `${user.id}/${crypto.randomUUID()}${ext}`;
+        const { error } = await supabase.storage
+          .from('saved-video-photos')
+          .upload(path, photo.file, { contentType: photo.file.type });
+        if (error) throw error;
+        const { data } = supabase.storage.from('saved-video-photos').getPublicUrl(path);
+        persistentPhotoUrls.push(data.publicUrl);
+      }
+
+      // 2. Render + upload MP4
+      let mp4Url: string | null = null;
+      let partialSaveMessage: string | null = null;
+      if (canExportMp4()) {
+        try {
+          const blob = mp4Blob ?? await renderVideoToMp4(result.scene_sequence, photos.map(p => p.file), () => {});
+          const mp4Path = `${user.id}/${crypto.randomUUID()}.mp4`;
+          const { error: mp4Err } = await supabase.storage
+            .from('saved-video-mp4s')
+            .upload(mp4Path, blob, { contentType: 'video/mp4' });
+          if (mp4Err) throw mp4Err;
+          const { data: mp4Data } = supabase.storage.from('saved-video-mp4s').getPublicUrl(mp4Path);
+          mp4Url = mp4Data.publicUrl;
+          if (!mp4Blob) {
+            setMp4Blob(blob);
+          }
+        } catch (err) {
+          console.error('MP4 render/upload failed during save:', err);
+          partialSaveMessage = `The promo was saved, but the MP4 file could not be attached. ${formatSaveError(err)}`;
+        }
+      }
+
+      // 3. Insert row
+      const { error: dbErr } = await supabase.from('saved_videos').insert({
+        user_id: user.id,
+        title: listingMeta?.title || 'Untitled',
+        price: listingMeta?.price ? Number(listingMeta.price) : null,
+        neighborhood: listingMeta?.neighborhood || null,
+        hooks: result.hooks,
+        scripts: result.scripts,
+        selected_script_index: result.selected_script_index,
+        scene_sequence: result.scene_sequence,
+        photo_urls: persistentPhotoUrls,
+        mp4_url: mp4Url,
+        confidence_score: result.confidence_score,
+        target_audience: result.market_positioning.target_audience,
+        video_angle: result.market_positioning.video_angle,
+        strengths: result.strengths,
+        weaknesses: result.weaknesses,
+        improvement_notes: result.improvement_notes,
+      });
+      if (dbErr) throw dbErr;
+      setSaved(true);
+      if (partialSaveMessage) {
+        alert(partialSaveMessage);
+      }
+    } catch (err: any) {
+      console.error('Save failed:', err);
+      alert(`Save failed: ${formatSaveError(err)}`);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -452,14 +555,23 @@ const ResultsView = ({ result, photos, audioUrl, onReset }: { result: Generation
 
             <div className="flex flex-col gap-3">
               {isSelected(idx) ? (
-                <button onClick={handleExport} disabled={exporting || !canExport}
-                  className={`btn-coral w-full flex items-center justify-center gap-2 ${!canExport ? 'opacity-40 cursor-not-allowed' : ''}`}
-                >
-                  {exporting
-                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting {exportProgress}%</>
-                    : <><Download className="w-4 h-4" /> Export MP4</>
-                  }
-                </button>
+                <>
+                  <button onClick={handleExport} disabled={exporting || !canExportMp4()}
+                    className={`btn-coral w-full flex items-center justify-center gap-2 ${!canExportMp4() ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  >
+                    {exporting
+                      ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting {exportProgress}%</>
+                      : <><Download className="w-4 h-4" /> Export MP4</>
+                    }
+                  </button>
+                  <button onClick={handleSave} disabled={saving || saved}
+                    className="btn-ghost w-full flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {saved ? <><Check className="w-4 h-4" /> Saved</>
+                     : saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving...</>
+                     : <><Bookmark className="w-4 h-4" /> Save Video</>}
+                  </button>
+                </>
               ) : (
                 <button className="btn-coral w-full flex items-center justify-center gap-2 opacity-40 cursor-not-allowed"><Download className="w-4 h-4" /> Download Assets</button>
               )}
@@ -502,13 +614,15 @@ export default function App() {
   const [submittedPhotos, setSubmittedPhotos] = useState<Photo[]>([]);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [listingMeta, setListingMeta] = useState<ListingMeta | null>(null);
 
-  const handleGenerate = (id: string, photos: Photo[]) => {
-    setJobId(id); setSubmittedPhotos(photos); setError(null); setScreen('loading');
+  const handleGenerate = (id: string, photos: Photo[], meta: ListingMeta) => {
+    setJobId(id); setSubmittedPhotos(photos); setListingMeta(meta); setError(null); setScreen('loading');
   };
   const handleComplete = (res: GenerationResult, audio: string | null) => { setAudioUrl(audio); setResult(res); setScreen('results'); };
   const handleError = (msg: string) => { setError(msg); setScreen('input'); };
-  const handleReset = () => { setScreen('input'); setJobId(null); setResult(null); setAudioUrl(null); setError(null); };
+  const handleReset = () => { setScreen('input'); setJobId(null); setResult(null); setAudioUrl(null); setError(null); setListingMeta(null); };
+  const handleShowSaved = () => { setScreen('saved'); };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 text-coral animate-spin" /></div>;
 
@@ -519,7 +633,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col selection:bg-coral/30 selection:text-coral">
-      <Navbar onReset={handleReset} onSignOut={signOut} />
+      <Navbar onReset={handleReset} onShowSaved={handleShowSaved} onSignOut={signOut} />
       {error && (
         <div className="max-w-7xl mx-auto px-8 w-full">
           <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 text-red-400 text-sm">{error}</div>
@@ -539,7 +653,12 @@ export default function App() {
           )}
           {screen === 'results' && result && (
             <motion.div key="results" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
-              <ResultsView result={result} photos={submittedPhotos} audioUrl={audioUrl} onReset={handleReset} />
+              <ResultsView result={result} photos={submittedPhotos} audioUrl={audioUrl} listingMeta={listingMeta} onReset={handleReset} />
+            </motion.div>
+          )}
+          {screen === 'saved' && (
+            <motion.div key="saved" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
+              <SavedVideosPage onBack={handleReset} />
             </motion.div>
           )}
         </AnimatePresence>
