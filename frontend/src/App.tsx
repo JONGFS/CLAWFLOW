@@ -19,11 +19,14 @@ import {
   DollarSign,
   Maximize,
   Sparkles,
-  LogOut
+  LogOut,
+  Bed,
+  Bath
 } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import AuthPage from './AuthPage';
 import LandingPage from './LandingPage';
+import { submitListing, NormalizedListing } from './api';
 
 // --- Types ---
 type Screen = 'input' | 'loading' | 'results';
@@ -32,6 +35,7 @@ interface Photo {
   id: string;
   url: string;
   label: string;
+  file: File;
 }
 
 // --- Components ---
@@ -53,22 +57,99 @@ const Navbar = ({ onReset, onSignOut }: { onReset: () => void; onSignOut: () => 
   </nav>
 );
 
-const InputForm = ({ onGenerate }: { onGenerate: () => void }) => {
+const InputForm = ({ onSubmit }: { onSubmit: (listing: NormalizedListing) => void }) => {
+  const [title, setTitle] = useState('');
+  const [price, setPrice] = useState('');
+  const [beds, setBeds] = useState('');
+  const [baths, setBaths] = useState('');
+  const [neighborhood, setNeighborhood] = useState('');
+  const [squareFootage, setSquareFootage] = useState('');
+  const [leasingSpecial, setLeasingSpecial] = useState('');
   const [amenities, setAmenities] = useState<string[]>([]);
   const [targetRenter, setTargetRenter] = useState<string>('Young Professional');
-  const [photos, setPhotos] = useState<Photo[]>([
-    { id: '1', url: 'https://picsum.photos/seed/room1/400/600', label: 'Bedroom' },
-    { id: '2', url: 'https://picsum.photos/seed/room2/400/600', label: 'Kitchen' },
-    { id: '3', url: 'https://picsum.photos/seed/room3/400/600', label: 'Living Room' },
-  ]);
+  const [photos, setPhotos] = useState<Photo[]>([]);
+  const [dragOver, setDragOver] = useState(false);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const amenityOptions = ['Gym', 'Pool', 'Parking', 'Pet Friendly', 'Furnished', 'Rooftop'];
   const targetOptions = ['Student', 'Young Professional', 'Budget Renter'];
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+  const addFiles = (files: FileList | File[]) => {
+    const newPhotos: Photo[] = [];
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue;
+      if (file.size > MAX_FILE_SIZE) continue;
+      const id = crypto.randomUUID().slice(0, 12);
+      newPhotos.push({
+        id,
+        url: URL.createObjectURL(file),
+        label: file.name.replace(/\.[^.]+$/, ''),
+        file,
+      });
+    }
+    setPhotos(prev => [...prev, ...newPhotos]);
+  };
+
+  const removePhoto = (id: string) => {
+    setPhotos(prev => {
+      const photo = prev.find(p => p.id === id);
+      if (photo) URL.revokeObjectURL(photo.url);
+      return prev.filter(p => p.id !== id);
+    });
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+  };
 
   const toggleAmenity = (amenity: string) => {
-    setAmenities(prev => 
+    setAmenities(prev =>
       prev.includes(amenity) ? prev.filter(a => a !== amenity) : [...prev, amenity]
     );
+  };
+
+  const validate = (): Record<string, string> => {
+    const errs: Record<string, string> = {};
+    if (!title.trim()) errs.title = 'Title is required';
+    if (!price || Number(price) <= 0) errs.price = 'Valid price is required';
+    if (!beds) errs.beds = 'Beds is required';
+    if (!baths) errs.baths = 'Baths is required';
+    if (!neighborhood.trim()) errs.neighborhood = 'Neighborhood is required';
+    return errs;
+  };
+
+  const handleSubmit = async () => {
+    const errs = validate();
+    setErrors(errs);
+    if (Object.keys(errs).length > 0) return;
+
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      const result = await submitListing({
+        title: title.trim(),
+        price: Number(price),
+        beds: Number(beds),
+        baths: Number(baths),
+        neighborhood: neighborhood.trim(),
+        squareFootage: squareFootage ? Number(squareFootage) : undefined,
+        amenities,
+        persona: targetRenter || undefined,
+        leasingSpecial: leasingSpecial.trim() || undefined,
+        photos: photos.map(p => p.file),
+      });
+      onSubmit(result);
+    } catch (err: any) {
+      setSubmitError(err.message || 'Something went wrong');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -80,28 +161,47 @@ const InputForm = ({ onGenerate }: { onGenerate: () => void }) => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Listing Title</label>
-              <input type="text" placeholder="Modern Loft in SoHo" className="w-full input-field" />
+              <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="Modern Loft in SoHo" className={`w-full input-field ${errors.title ? 'border-red-400' : ''}`} />
+              {errors.title && <p className="text-red-400 text-xs">{errors.title}</p>}
             </div>
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Rent Price</label>
               <div className="relative">
                 <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
-                <input type="text" placeholder="3,200" className="w-full input-field pl-9" />
+                <input type="number" value={price} onChange={e => setPrice(e.target.value)} placeholder="3200" className={`w-full input-field pl-9 ${errors.price ? 'border-red-400' : ''}`} />
               </div>
+              {errors.price && <p className="text-red-400 text-xs">{errors.price}</p>}
             </div>
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Neighborhood</label>
               <div className="relative">
                 <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
-                <input type="text" placeholder="Manhattan, NY" className="w-full input-field pl-9" />
+                <input type="text" value={neighborhood} onChange={e => setNeighborhood(e.target.value)} placeholder="Manhattan, NY" className={`w-full input-field pl-9 ${errors.neighborhood ? 'border-red-400' : ''}`} />
               </div>
+              {errors.neighborhood && <p className="text-red-400 text-xs">{errors.neighborhood}</p>}
             </div>
             <div className="space-y-1.5">
               <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Square Footage</label>
               <div className="relative">
                 <Maximize className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
-                <input type="text" placeholder="850" className="w-full input-field pl-9" />
+                <input type="number" value={squareFootage} onChange={e => setSquareFootage(e.target.value)} placeholder="850" className="w-full input-field pl-9" />
               </div>
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Beds</label>
+              <div className="relative">
+                <Bed className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+                <input type="number" value={beds} onChange={e => setBeds(e.target.value)} placeholder="2" min="0" className={`w-full input-field pl-9 ${errors.beds ? 'border-red-400' : ''}`} />
+              </div>
+              {errors.beds && <p className="text-red-400 text-xs">{errors.beds}</p>}
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Baths</label>
+              <div className="relative">
+                <Bath className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-white/40" />
+                <input type="number" value={baths} onChange={e => setBaths(e.target.value)} placeholder="1" min="0" className={`w-full input-field pl-9 ${errors.baths ? 'border-red-400' : ''}`} />
+              </div>
+              {errors.baths && <p className="text-red-400 text-xs">{errors.baths}</p>}
             </div>
           </div>
         </div>
@@ -114,8 +214,8 @@ const InputForm = ({ onGenerate }: { onGenerate: () => void }) => {
                 key={option}
                 onClick={() => toggleAmenity(option)}
                 className={`px-4 py-2 rounded-full text-xs font-medium border transition-all ${
-                  amenities.includes(option) 
-                    ? 'bg-coral border-coral text-white' 
+                  amenities.includes(option)
+                    ? 'bg-coral border-coral text-white'
                     : 'bg-white/5 border-white/10 text-white/60 hover:border-white/20'
                 }`}
               >
@@ -144,15 +244,32 @@ const InputForm = ({ onGenerate }: { onGenerate: () => void }) => {
 
         <div className="space-y-1.5">
           <label className="text-[11px] uppercase tracking-wider text-white/40 font-semibold">Leasing Special (Optional)</label>
-          <input type="text" placeholder="e.g. First month free on 12-month lease" className="w-full input-field" />
+          <input type="text" value={leasingSpecial} onChange={e => setLeasingSpecial(e.target.value)} placeholder="e.g. First month free on 12-month lease" className="w-full input-field" />
         </div>
       </div>
 
       {/* Right Column: Upload */}
       <div className="space-y-8">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          accept="image/*"
+          className="hidden"
+          onChange={(e) => { if (e.target.files?.length) { addFiles(e.target.files); e.target.value = ''; } }}
+        />
+
         <div className="space-y-4">
           <h2 className="text-3xl font-medium">Property Photos</h2>
-          <div className="border-2 border-dashed border-white/10 rounded-xl p-12 flex flex-col items-center justify-center gap-4 bg-white/[0.02] hover:bg-white/[0.04] transition-colors cursor-pointer">
+          <div
+            onClick={() => fileInputRef.current?.click()}
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={handleDrop}
+            className={`border-2 border-dashed rounded-xl p-12 flex flex-col items-center justify-center gap-4 transition-colors cursor-pointer ${
+              dragOver ? 'border-coral bg-coral/5' : 'border-white/10 bg-white/[0.02] hover:bg-white/[0.04]'
+            }`}
+          >
             <div className="w-12 h-12 rounded-full bg-coral/10 flex items-center justify-center">
               <Upload className="w-6 h-6 text-coral" />
             </div>
@@ -163,42 +280,57 @@ const InputForm = ({ onGenerate }: { onGenerate: () => void }) => {
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-4">
-          {photos.map((photo, idx) => (
-            <div key={photo.id} className="space-y-2 group">
-              <div className="aspect-[3/4] rounded-lg overflow-hidden relative border border-white/10">
-                <img src={photo.url} alt={photo.label} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button className="w-6 h-6 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center hover:bg-black">
-                    <X className="w-3 h-3" />
-                  </button>
+        {photos.length > 0 && (
+          <div className="grid grid-cols-3 gap-4">
+            {photos.map((photo, idx) => (
+              <div key={photo.id} className="space-y-2 group">
+                <div className="aspect-[3/4] rounded-lg overflow-hidden relative border border-white/10">
+                  <img src={photo.url} alt={photo.label} className="w-full h-full object-cover" />
+                  <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={() => removePhoto(photo.id)}
+                      className="w-6 h-6 rounded-full bg-black/60 backdrop-blur-sm flex items-center justify-center hover:bg-black"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                  <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[10px] uppercase tracking-tighter font-bold">
+                    {String(idx + 1).padStart(2, '0')}
+                  </div>
                 </div>
-                <div className="absolute bottom-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[10px] uppercase tracking-tighter font-bold">
-                  0{idx + 1}
-                </div>
+                <input
+                  type="text"
+                  value={photo.label}
+                  onChange={(e) => setPhotos(prev => prev.map(p => p.id === photo.id ? { ...p, label: e.target.value } : p))}
+                  className="w-full bg-transparent text-[11px] text-white/60 text-center focus:text-white outline-none"
+                />
               </div>
-              <input 
-                type="text" 
-                value={photo.label} 
-                onChange={() => {}} 
-                className="w-full bg-transparent text-[11px] text-white/60 text-center focus:text-white outline-none"
-              />
-            </div>
-          ))}
-          <button className="aspect-[3/4] rounded-lg border border-dashed border-white/10 flex flex-col items-center justify-center gap-2 hover:bg-white/[0.02] transition-colors">
-            <Plus className="w-5 h-5 text-white/20" />
-            <span className="text-[10px] text-white/20 uppercase font-bold">Add Photo</span>
-          </button>
-        </div>
-      </div>
+            ))}
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="aspect-[3/4] rounded-lg border border-dashed border-white/10 flex flex-col items-center justify-center gap-2 hover:bg-white/[0.02] transition-colors"
+            >
+              <Plus className="w-5 h-5 text-white/20" />
+              <span className="text-[10px] text-white/20 uppercase font-bold">Add Photo</span>
+            </button>
+          </div>
+        )}</div>
 
       {/* Full Width Button */}
-      <div className="lg:col-span-2 pt-8">
-        <button 
-          onClick={onGenerate}
-          className="w-full btn-coral py-5 text-lg flex items-center justify-center gap-3 shadow-xl shadow-coral/10"
+      <div className="lg:col-span-2 pt-8 space-y-3">
+        {submitError && (
+          <p className="text-red-400 text-sm text-center">{submitError}</p>
+        )}
+        <button
+          onClick={handleSubmit}
+          disabled={submitting}
+          className="w-full btn-coral py-5 text-lg flex items-center justify-center gap-3 shadow-xl shadow-coral/10 disabled:opacity-50"
         >
-          Generate Promos <ChevronRight className="w-5 h-5" />
+          {submitting ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <>Generate Promos <ChevronRight className="w-5 h-5" /></>
+          )}
         </button>
       </div>
     </div>
@@ -367,10 +499,14 @@ export default function App() {
   const { user, loading, signOut } = useAuth();
   const [screen, setScreen] = useState<Screen>('input');
   const [page, setPage] = useState<Page>('landing');
+  const [listing, setListing] = useState<NormalizedListing | null>(null);
 
-  const handleGenerate = () => setScreen('loading');
+  const handleSubmit = (result: NormalizedListing) => {
+    setListing(result);
+    setScreen('loading');
+  };
   const handleComplete = () => setScreen('results');
-  const handleReset = () => setScreen('input');
+  const handleReset = () => { setScreen('input'); setListing(null); };
 
   if (loading) {
     return (
@@ -411,7 +547,7 @@ export default function App() {
               exit={{ opacity: 0, x: 20 }}
               transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
             >
-              <InputForm onGenerate={handleGenerate} />
+              <InputForm onSubmit={handleSubmit} />
             </motion.div>
           )}
 
