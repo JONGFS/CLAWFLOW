@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&family=DM+Serif+Display:ital@0;1&display=swap');
+
+@theme {
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "DM Serif Display", serif;
+  --color-coral: #E8593C;
+  --color-black-bg: #0f0f0f;
+}
+
+body {
+  background-color: var(--color-black-bg);
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, .logo {
+  font-family: var(--font-serif);
+}
+
+.card-surface {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+}
+
+.input-field {
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 0.5px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+  color: white;
+  transition: border-color 0.2s;
+}
+
+.input-field:focus {
+  outline: none;
+  border-color: var(--color-coral);
+}
+
+.btn-coral {
+  background-color: var(--color-coral);
+  color: white;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 500;
+  transition: opacity 0.2s;
+}
+
+.btn-coral:hover {
+  opacity: 0.9;
+}
+
+.btn-ghost {
+  background-color: transparent;
+  border: 0.5px solid rgba(255, 255, 255, 0.2);
+  color: white;
+  border-radius: 8px;
+  padding: 10px 20px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.btn-ghost:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+}
