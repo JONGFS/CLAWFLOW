@@ -9,6 +9,9 @@ import {
   Upload, Check, Loader2, ChevronRight, Plus, X, Download, RefreshCw,
   LayoutGrid, MapPin, DollarSign, Maximize, Sparkles, LogOut, Bed, Bath,
 } from 'lucide-react';
+import { Player } from '@remotion/player';
+import { VideoComposition, VIDEO_WIDTH, VIDEO_HEIGHT, VIDEO_FPS } from './VideoComposition';
+import type { VideoCompositionProps } from './VideoComposition';
 import { useAuth } from './AuthContext';
 import AuthPage from './AuthPage';
 import LandingPage from './LandingPage';
@@ -41,8 +44,6 @@ interface GenerationResult {
   strengths: string[];
   weaknesses: string[];
   improvement_notes: string[];
-  voiceover_url: string | null;
-  video_url: string | null;
 }
 
 // ── Navbar ─────────────────────────────────────────────────────────────────────
@@ -276,17 +277,16 @@ const InputForm = ({ onGenerate }: { onGenerate: (jobId: string, photos: Photo[]
 const STAGE_LABELS: Record<string, string> = {
   pending: 'Queuing your request', Analyst: 'Analyzing your listing',
   'Hook Writer': 'Writing opening hooks', Director: 'Building your storyboard',
-  Critic: 'Scoring the result', Voiceover: 'Generating voiceover', Rendering: 'Rendering your video',
+  Critic: 'Scoring the result', FrontendTTS: 'Synthesizing voice in browser',
 };
 
-const LoadingState = ({ jobId, onComplete, onError }: { jobId: string; onComplete: (r: GenerationResult) => void; onError: (m: string) => void }) => {
+const LoadingState = ({ jobId, onComplete, onError }: { jobId: string; onComplete: (r: GenerationResult, audioUrl: string | null) => void; onError: (m: string) => void }) => {
   const stages = [
     { key: 'Analyst', label: 'Listing Agent', sub: 'Analyzing your listing' },
     { key: 'Hook Writer', label: 'Hook Agent', sub: 'Writing opening hooks' },
     { key: 'Director', label: 'Storyboard Agent', sub: 'Mapping photos to scenes' },
     { key: 'Critic', label: 'Critic Agent', sub: 'Scoring the result' },
-    { key: 'Voiceover', label: 'Voice Service', sub: 'Generating narration' },
-    { key: 'Rendering', label: 'Render Engine', sub: 'Assembling your video' },
+    { key: 'FrontendTTS', label: 'Voice Synthesis', sub: 'Generating narration in browser' },
   ];
   const [currentStage, setCurrentStage] = useState('pending');
 
@@ -300,7 +300,18 @@ const LoadingState = ({ jobId, onComplete, onError }: { jobId: string; onComplet
           const data = await res.json();
           if (cancelled) return;
           setCurrentStage(data.stage || data.status);
-          if (data.status === 'done') { onComplete(data.result); return; }
+          if (data.status === 'done') {
+            setCurrentStage('FrontendTTS');
+            let audioUrl: string | null = null;
+            try {
+              const script = data.result.scripts[data.result.selected_script_index];
+              const scriptText = `${script.hook}. ${script.body_copy}. ${script.cta}`;
+              const audioEl = await window.puter?.ai.txt2speech(scriptText);
+              if (audioEl?.src) audioUrl = audioEl.src;
+            } catch { /* TTS failed — continue without audio */ }
+            if (!cancelled) onComplete(data.result, audioUrl);
+            return;
+          }
           if (data.status === 'error') { onError(data.error || 'Unknown error'); return; }
         } catch { /* keep polling */ }
       }
@@ -343,8 +354,40 @@ const LoadingState = ({ jobId, onComplete, onError }: { jobId: string; onComplet
 
 // ── ResultsView ────────────────────────────────────────────────────────────────
 
-const ResultsView = ({ result, photos, onReset }: { result: GenerationResult; photos: Photo[]; onReset: () => void }) => {
+const ResultsView = ({ result, photos, audioUrl, onReset }: { result: GenerationResult; photos: Photo[]; audioUrl: string | null; onReset: () => void }) => {
+  const [exporting, setExporting] = useState(false);
+  const [exportProgress, setExportProgress] = useState(0);
+  const canExport = typeof window.VideoEncoder !== 'undefined';
+
+  const photoUrls = photos.map(p => p.url);
   const getPhotoSrc = (index: number) => photos[index]?.url ?? `https://picsum.photos/seed/promo${index}/1080/1920`;
+
+  const totalFrames = result.scene_sequence.reduce(
+    (acc, s) => acc + Math.round(s.duration_sec * VIDEO_FPS), 0
+  );
+
+  const handleExport = async () => {
+    if (!canExport) {
+      alert('Export requires Chrome 94+ or Edge 94+');
+      return;
+    }
+    setExporting(true);
+    setExportProgress(0);
+    try {
+      const { convertMedia } = await import('@remotion/webcodecs');
+      // WebCodecs-based export — uses convertMedia for browser rendering
+      // Note: full browser-side rendering with Remotion requires Remotion Studio or Lambda;
+      // convertMedia handles media conversion. For now, we provide the Player preview.
+      alert('Full MP4 export coming soon. Use the Player preview to review your video.');
+    } catch (err) {
+      console.error('Export failed:', err);
+      alert('Export failed. Please try again.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const isSelected = (idx: number) => idx === result.selected_script_index;
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-7xl mx-auto px-8 pb-20 space-y-12">
@@ -367,32 +410,59 @@ const ResultsView = ({ result, photos, onReset }: { result: GenerationResult; ph
         {result.scripts.map((script, idx) => (
           <div key={idx} className="space-y-6">
             <div className="text-[11px] uppercase tracking-widest text-white/40 font-bold text-center">{result.hooks[idx] ?? `Variant ${idx + 1}`}</div>
-            <div className="aspect-[9/16] card-surface overflow-hidden relative group cursor-pointer border-white/10 hover:border-coral/50 transition-colors">
-              <img src={getPhotoSrc(idx)} className="w-full h-full object-cover opacity-60 group-hover:scale-105 transition-transform duration-700" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 p-8 flex flex-col justify-between">
-                <div className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center self-end"><LayoutGrid className="w-4 h-4" /></div>
-                <div className="space-y-4">
-                  <div className="bg-coral px-3 py-1 rounded text-[10px] font-bold uppercase w-fit tracking-wider">Hook</div>
-                  <h3 className="text-xl font-medium leading-tight">{script.hook}</h3>
-                  <p className="text-xs text-white/70 leading-relaxed line-clamp-3">{script.body_copy}</p>
-                  <p className="text-xs text-coral font-semibold">{script.cta}</p>
-                  {result.scene_sequence.length > 0 && (
-                    <div className="flex gap-2 pt-2">
-                      {result.scene_sequence.slice(0, 3).map((scene, si) => (
-                        <div key={si} className="w-12 h-16 rounded bg-white/10 border border-white/20 overflow-hidden">
-                          <img src={getPhotoSrc(scene.photo_index)} className="w-full h-full object-cover" />
-                        </div>
-                      ))}
-                    </div>
-                  )}
+
+            {isSelected(idx) ? (
+              /* ── Remotion Player for selected variant ── */
+              <div className="aspect-[9/16] card-surface overflow-hidden rounded-xl border border-coral/30">
+                <Player
+                  component={VideoComposition}
+                  inputProps={{ scenes: result.scene_sequence, photoUrls, audioUrl } as VideoCompositionProps}
+                  durationInFrames={Math.max(totalFrames, 1)}
+                  compositionWidth={VIDEO_WIDTH}
+                  compositionHeight={VIDEO_HEIGHT}
+                  fps={VIDEO_FPS}
+                  controls
+                  style={{ width: '100%', height: '100%' }}
+                />
+              </div>
+            ) : (
+              /* ── Static preview for non-selected variants ── */
+              <div className="aspect-[9/16] card-surface overflow-hidden relative group cursor-pointer border-white/10 hover:border-coral/50 transition-colors">
+                <img src={getPhotoSrc(idx)} className="w-full h-full object-cover opacity-60 group-hover:scale-105 transition-transform duration-700" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 p-8 flex flex-col justify-between">
+                  <div className="w-10 h-10 rounded-full bg-white/10 backdrop-blur-md flex items-center justify-center self-end"><LayoutGrid className="w-4 h-4" /></div>
+                  <div className="space-y-4">
+                    <div className="bg-coral px-3 py-1 rounded text-[10px] font-bold uppercase w-fit tracking-wider">Hook</div>
+                    <h3 className="text-xl font-medium leading-tight">{script.hook}</h3>
+                    <p className="text-xs text-white/70 leading-relaxed line-clamp-3">{script.body_copy}</p>
+                    <p className="text-xs text-coral font-semibold">{script.cta}</p>
+                    {result.scene_sequence.length > 0 && (
+                      <div className="flex gap-2 pt-2">
+                        {result.scene_sequence.slice(0, 3).map((scene, si) => (
+                          <div key={si} className="w-12 h-16 rounded bg-white/10 border border-white/20 overflow-hidden">
+                            <img src={getPhotoSrc(scene.photo_index)} className="w-full h-full object-cover" />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
+
             <div className="flex flex-col gap-3">
-              {result.video_url && idx === result.selected_script_index
-                ? <a href={`${API_BASE}${result.video_url}`} download className="btn-coral w-full flex items-center justify-center gap-2"><Download className="w-4 h-4" /> Download Video</a>
-                : <button className="btn-coral w-full flex items-center justify-center gap-2 opacity-40 cursor-not-allowed"><Download className="w-4 h-4" /> Download Assets</button>
-              }
+              {isSelected(idx) ? (
+                <button onClick={handleExport} disabled={exporting || !canExport}
+                  className={`btn-coral w-full flex items-center justify-center gap-2 ${!canExport ? 'opacity-40 cursor-not-allowed' : ''}`}
+                >
+                  {exporting
+                    ? <><Loader2 className="w-4 h-4 animate-spin" /> Exporting {exportProgress}%</>
+                    : <><Download className="w-4 h-4" /> Export MP4</>
+                  }
+                </button>
+              ) : (
+                <button className="btn-coral w-full flex items-center justify-center gap-2 opacity-40 cursor-not-allowed"><Download className="w-4 h-4" /> Download Assets</button>
+              )}
               <button onClick={onReset} className="btn-ghost w-full flex items-center justify-center gap-2"><RefreshCw className="w-4 h-4" /> Regenerate</button>
             </div>
           </div>
@@ -430,14 +500,15 @@ export default function App() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [result, setResult] = useState<GenerationResult | null>(null);
   const [submittedPhotos, setSubmittedPhotos] = useState<Photo[]>([]);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleGenerate = (id: string, photos: Photo[]) => {
     setJobId(id); setSubmittedPhotos(photos); setError(null); setScreen('loading');
   };
-  const handleComplete = (res: GenerationResult) => { setResult(res); setScreen('results'); };
+  const handleComplete = (res: GenerationResult, audio: string | null) => { setAudioUrl(audio); setResult(res); setScreen('results'); };
   const handleError = (msg: string) => { setError(msg); setScreen('input'); };
-  const handleReset = () => { setScreen('input'); setJobId(null); setResult(null); setError(null); };
+  const handleReset = () => { setScreen('input'); setJobId(null); setResult(null); setAudioUrl(null); setError(null); };
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="w-8 h-8 text-coral animate-spin" /></div>;
 
@@ -468,7 +539,7 @@ export default function App() {
           )}
           {screen === 'results' && result && (
             <motion.div key="results" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}>
-              <ResultsView result={result} photos={submittedPhotos} onReset={handleReset} />
+              <ResultsView result={result} photos={submittedPhotos} audioUrl={audioUrl} onReset={handleReset} />
             </motion.div>
           )}
         </AnimatePresence>

@@ -84,8 +84,6 @@ class GenerationResult(BaseModel):
     strengths: list[str]
     weaknesses: list[str]
     improvement_notes: list[str]
-    voiceover_url: Optional[str] = None
-    video_url: Optional[str] = None
 
 
 class StatusResponse(BaseModel):

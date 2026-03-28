@@ -57,7 +57,7 @@ def _safe_get(data: dict, key: str, default: Any = None) -> Any:
 
 # ── crew factory ──────────────────────────────────────────────────────────────
 
-def run_pipeline(listing: ListingData) -> dict:
+def run_pipeline(listing: ListingData, on_stage_change: Any = None) -> dict:
     """
     Run the full CrewAI pipeline for a listing.
     Returns a dict with keys: market_positioning, hooks_and_scripts, scene_plan, critique.
@@ -165,11 +165,20 @@ def run_pipeline(listing: ListingData) -> dict:
     )
 
     # ── Crew ──────────────────────────────────────────────────────────────────
+    stage_order = ["Analyst", "Hook Writer", "Director", "Critic"]
+    stage_index = [0]  # mutable for closure
+
+    def _task_callback(output):
+        stage_index[0] += 1
+        if on_stage_change and stage_index[0] < len(stage_order):
+            on_stage_change(stage_order[stage_index[0]])
+
     crew = Crew(
         agents=[analyst, hook_writer, director, critic],
         tasks=[analyze_task, hooks_task, director_task, critic_task],
         process=Process.sequential,
         verbose=True,
+        task_callback=_task_callback,
     )
 
     crew.kickoff()

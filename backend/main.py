@@ -7,7 +7,6 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
 
 load_dotenv()
 
@@ -18,7 +17,7 @@ from backend.storage import store_listing, get_listing
 # CrewAI pipeline + services
 from backend.crew import run_pipeline
 from backend.models.schemas import GenerateRequest, GenerationResult, StatusResponse
-from backend.services import normalizer, tts, renderer
+from backend.services import normalizer
 
 OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
@@ -66,10 +65,13 @@ def _run_job(job_id: str, listing_json: str, photo_paths: list[str]):
     try:
         _jobs[job_id] = StatusResponse(job_id=job_id, status="running", stage="Analyst")
 
+        def on_stage(stage_name: str):
+            _jobs[job_id] = StatusResponse(job_id=job_id, status="running", stage=stage_name)
+
         req = GenerateRequest(**json.loads(listing_json))
         listing = normalizer.normalize(req, photo_count=len(photo_paths))
 
-        pipeline_result = run_pipeline(listing)
+        pipeline_result = run_pipeline(listing, on_stage_change=on_stage)
 
         positioning = pipeline_result["market_positioning"]
         hooks_result = pipeline_result["hooks_and_scripts"]
@@ -77,26 +79,6 @@ def _run_job(job_id: str, listing_json: str, photo_paths: list[str]):
         critique = pipeline_result["critique"]
 
         selected_idx = hooks_result.selected_variant_index
-        selected_script = hooks_result.variants[selected_idx] if hooks_result.variants else None
-        full_script = (
-            f"{selected_script.hook} {selected_script.body_copy} {selected_script.cta}"
-            if selected_script
-            else ""
-        )
-
-        _jobs[job_id] = StatusResponse(job_id=job_id, status="running", stage="Voiceover")
-        voice_path, _ = tts.generate_voiceover(full_script, job_id)
-
-        _jobs[job_id] = StatusResponse(job_id=job_id, status="running", stage="Rendering")
-        video_path = renderer.render_video(
-            scenes=scene_plan.scene_sequence,
-            photo_paths=photo_paths,
-            job_id=job_id,
-            voiceover_path=voice_path,
-        )
-
-        video_url = f"/api/video/{job_id}" if video_path else None
-        voice_url = f"/api/audio/{job_id}" if voice_path else None
 
         result = GenerationResult(
             job_id=job_id,
@@ -110,8 +92,6 @@ def _run_job(job_id: str, listing_json: str, photo_paths: list[str]):
             strengths=critique.strengths,
             weaknesses=critique.weaknesses,
             improvement_notes=critique.improvement_notes,
-            voiceover_url=voice_url,
-            video_url=video_url,
         )
 
         _jobs[job_id] = StatusResponse(job_id=job_id, status="done", result=result)
@@ -222,21 +202,6 @@ def get_status(job_id: str) -> StatusResponse:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-
-@app.get("/api/video/{job_id}")
-def get_video(job_id: str):
-    video_path = OUTPUTS_DIR / f"{job_id}_video.mp4"
-    if not video_path.exists():
-        raise HTTPException(status_code=404, detail="Video not found")
-    return FileResponse(str(video_path), media_type="video/mp4")
-
-
-@app.get("/api/audio/{job_id}")
-def get_audio(job_id: str):
-    audio_path = OUTPUTS_DIR / f"{job_id}_voice.mp3"
-    if not audio_path.exists():
-        raise HTTPException(status_code=404, detail="Audio not found")
-    return FileResponse(str(audio_path), media_type="audio/mpeg")
 
 
 if __name__ == "__main__":
