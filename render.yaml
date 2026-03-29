@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: clawflow-api
+    runtime: python
+    plan: free
+    autoDeployTrigger: commit
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    buildFilter:
+      paths:
+        - backend/**
+        - render.yaml
+        - Procfile
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CREWAI_MODEL
+        sync: false
+      - key: CORS_ALLOW_ORIGINS
+        sync: false
+      - key: CORS_ALLOW_ORIGIN_REGEX
+        sync: false

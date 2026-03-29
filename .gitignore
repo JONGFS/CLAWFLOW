@@ -24,6 +24,7 @@ ENV/
 htmlcov/
 node_modules/
 backend/outputs/
+.vercel/
 
 # Environment files
 .env

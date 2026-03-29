@@ -22,9 +22,21 @@ from backend.services import normalizer
 OUTPUTS_DIR = Path(__file__).resolve().parent / "outputs"
 OUTPUTS_DIR.mkdir(exist_ok=True)
 
-DEFAULT_CORS_REGEX = (
-    r"https?://.*"
-)
+LOCAL_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://0.0.0.0:3000",
+    "http://0.0.0.0:5173",
+]
+DEFAULT_CORS_REGEX = r"^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?$"
+
+
+def _load_cors_origins() -> list[str]:
+    extra_origins = os.getenv("CORS_ALLOW_ORIGINS", "")
+    parsed = [origin.strip() for origin in extra_origins.split(",") if origin.strip()]
+    return [*LOCAL_ORIGINS, *parsed]
 
 app = FastAPI(
     title="LandlordFlip API",
@@ -34,10 +46,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-    ],
+    allow_origins=_load_cors_origins(),
     allow_origin_regex=os.getenv("CORS_ALLOW_ORIGIN_REGEX", DEFAULT_CORS_REGEX),
     allow_credentials=True,
     allow_methods=["*"],

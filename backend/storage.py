@@ -25,12 +25,12 @@ def _get_client() -> Client:
     if _client is not None:
         return _client
 
-    url = os.getenv("VITE_SUPABASE_URL", "")
+    url = os.getenv("SUPABASE_URL") or os.getenv("VITE_SUPABASE_URL", "")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
     if not url or not key:
         raise RuntimeError(
-            "VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env"
+            "SUPABASE_URL (or VITE_SUPABASE_URL) and SUPABASE_SERVICE_ROLE_KEY must be set"
         )
 
     _client = create_client(url, key)
