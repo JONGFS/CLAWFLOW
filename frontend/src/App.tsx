@@ -642,7 +642,7 @@ const ResultsView = ({ result, photos, audioUrl, onReset }: { result: Generation
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `clawflow-promo.mp4`;
+      a.download = `landlordflip-promo.mp4`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

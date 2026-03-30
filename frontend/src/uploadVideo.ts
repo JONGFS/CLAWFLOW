@@ -49,7 +49,7 @@ export async function listSavedVideos(accessToken: string): Promise<SavedVideo[]
 
 export async function uploadGeneratedVideo(accessToken: string, blob: Blob): Promise<SavedVideo> {
   const form = new FormData();
-  form.append('file', blob, 'clawflow-promo.mp4');
+  form.append('file', blob, 'landlordflip-promo.mp4');
 
   const res = await fetch(`${API_URL}/api/videos`, {
     method: 'POST',
